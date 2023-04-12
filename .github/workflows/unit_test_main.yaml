@@ -59,3 +59,18 @@ jobs:
         working-directory: tests
         run: |
           python3 -m pytest ./
+
+      - name: Generate coverage report
+        run: |
+          rm -rf ./coverage.xml
+          pip install coverage codecov pytest pytest-cov
+          coverage erase
+          coverage run --source=gptcache  -m pytest ./tests
+          coverage xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3.1.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: true

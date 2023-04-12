@@ -1,11 +1,13 @@
 from abc import abstractmethod, ABCMeta
 import pickle
+from typing import List, Any
+
 import cachetools
 import numpy as np
 
-from gptcache.utils.error import CacheError
-from gptcache.manager.scalar_data.base import CacheStorage
-from gptcache.manager.vector_data.base import VectorBase, ClearStrategy
+from gptcache.utils.error import CacheError, ParamError
+from gptcache.manager.scalar_data.base import CacheStorage, CacheData
+from gptcache.manager.vector_data.base import VectorBase, VectorData
 from gptcache.manager.eviction import EvictionManager
 
 
@@ -14,6 +16,12 @@ class DataManager(metaclass=ABCMeta):
 
     @abstractmethod
     def save(self, question, answer, embedding_data, **kwargs):
+        pass
+
+    @abstractmethod
+    def import_data(
+        self, questions: List[Any], answers: List[Any], embedding_datas: List[Any]
+    ):
         pass
 
     # should return the tuple, (question, answer)
@@ -49,11 +57,19 @@ class MapDataManager(DataManager):
             return
         except PermissionError:
             raise CacheError(  # pylint: disable=W0707
-                f"You don't have permission to access this file <${self.data_path}>."
+                f"You don't have permission to access this file <{self.data_path}>."
             )
 
     def save(self, question, answer, embedding_data, **kwargs):
         self.data[embedding_data] = (question, answer)
+
+    def import_data(
+        self, questions: List[Any], answers: List[Any], embedding_datas: List[Any]
+    ):
+        if len(questions) != len(answers) or len(questions) != len(embedding_datas):
+            raise ParamError("Make sure that all parameters have the same length")
+        for i, embedding_data in enumerate(embedding_datas):
+            self.data[embedding_data] = (questions[i], answers[i])
 
     def get_scalar_data(self, res_data, **kwargs):
         return res_data
@@ -69,7 +85,7 @@ class MapDataManager(DataManager):
             with open(self.data_path, "wb") as f:
                 pickle.dump(self.data, f)
         except PermissionError:
-            print(f"You don't have permission to access this file <${self.data_path}>.")
+            print(f"You don't have permission to access this file <{self.data_path}>.")
 
 
 def normalize(vec):
@@ -107,14 +123,8 @@ class SSDataManager(DataManager):
 
     def _clear(self):
         self.eviction.soft_evict(self.clean_size)
-        if not self.eviction.check_evict():
-            pass
-        elif self.v.clear_strategy() == ClearStrategy.DELETE:
+        if self.eviction.check_evict():
             self.eviction.delete()
-        elif self.v.clear_strategy() == ClearStrategy.REBUILD:
-            self.eviction.rebuild()
-        else:
-            raise RuntimeError("Unknown clear strategy")
         self.cur_size = self.s.count()
 
     def save(self, question, answer, embedding_data, **kwargs):
@@ -139,13 +149,34 @@ class SSDataManager(DataManager):
 
         if self.cur_size >= self.max_size:
             self._clear()
-        embedding_data = normalize(embedding_data)
-        if self.v.clear_strategy() == ClearStrategy.DELETE:
-            key = self.s.insert(question, answer)
-        elif self.v.clear_strategy() == ClearStrategy.REBUILD:
-            key = self.s.insert(question, answer, embedding_data.astype("float32"))
-        self.v.add(key, embedding_data)
-        self.cur_size += 1
+
+        self.import_data([question], [answer], [embedding_data])
+
+    def import_data(
+        self, questions: List[Any], answers: List[Any], embedding_datas: List[Any]
+    ):
+        if len(questions) != len(answers) or len(questions) != len(embedding_datas):
+            raise ParamError("Make sure that all parameters have the same length")
+        cache_datas = []
+        embedding_datas = [
+            normalize(embedding_data) for embedding_data in embedding_datas
+        ]
+        for i, embedding_data in enumerate(embedding_datas):
+            cache_datas.append(
+                CacheData(
+                    question=questions[i],
+                    answer=answers[i],
+                    embedding_data=embedding_data.astype("float32"),
+                )
+            )
+        ids = self.s.batch_insert(cache_datas)
+        self.v.mul_add(
+            [
+                VectorData(id=ids[i], data=embedding_data)
+                for i, embedding_data in enumerate(embedding_datas)
+            ]
+        )
+        self.cur_size += len(questions)
 
     def get_scalar_data(self, res_data, **kwargs):
         return self.s.get_data_by_id(res_data[1])

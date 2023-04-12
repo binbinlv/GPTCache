@@ -1,6 +1,8 @@
 import atexit
 import os
 import time
+from typing import List, Any, Optional, Callable
+
 import openai
 
 from gptcache.embedding.string import to_embeddings as string_embedding
@@ -50,14 +52,18 @@ class Config:
     """
 
     def __init__(
-        self,
-        log_time_func=None,
-        similarity_threshold=0.8,
+            self,
+            log_time_func: Optional[Callable[[str, float], None]] = None,
+            similarity_threshold: float = 0.8,
+            prompts: Optional[List[str]] = None
     ):
         if similarity_threshold < 0 or similarity_threshold > 1:
-            raise CacheError("Invalid the similarity threshold param, reasonable range: 0-1")
+            raise CacheError(
+                "Invalid the similarity threshold param, reasonable range: 0-1"
+            )
         self.log_time_func = log_time_func
         self.similarity_threshold = similarity_threshold
+        self.prompts = prompts
 
 
 class Report:
@@ -134,22 +140,22 @@ class Cache:
         self.cache_enable_func = None
         self.pre_embedding_func = None
         self.embedding_func = None
-        self.data_manager = None
+        self.data_manager: Optional[DataManager] = None
         self.post_process_messages_func = None
         self.config = Config()
         self.report = Report()
         self.next_cache = None
 
     def init(
-        self,
-        cache_enable_func=cache_all,
-        pre_embedding_func=last_content,
-        embedding_func=string_embedding,
-        data_manager: DataManager = get_data_manager(),
-        similarity_evaluation=ExactMatchEvaluation(),
-        post_process_messages_func=first,
-        config=Config(),
-        next_cache=None,
+            self,
+            cache_enable_func=cache_all,
+            pre_embedding_func=last_content,
+            embedding_func=string_embedding,
+            data_manager: DataManager = get_data_manager(),
+            similarity_evaluation=ExactMatchEvaluation(),
+            post_process_messages_func=first,
+            config=Config(),
+            next_cache=None,
     ):
         """Pass parameters to initialize GPTCache.
 
@@ -178,6 +184,19 @@ class Cache:
                 self.data_manager.close()
             except Exception as e:  # pylint: disable=W0703
                 print(e)
+
+    def import_data(self, questions: List[Any], answers: List[Any]) -> None:
+        """ Import data to GPTCache
+
+        :param questions: preprocessed question Data
+        :param answers: list of answers to questions
+        :return: None
+        """
+        self.data_manager.import_data(
+            questions=questions,
+            answers=answers,
+            embedding_datas=[self.embedding_func(question) for question in questions],
+        )
 
     @staticmethod
     def set_openai_key():

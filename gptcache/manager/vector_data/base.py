@@ -1,33 +1,35 @@
 from abc import ABC, abstractmethod
-from enum import Enum
+from dataclasses import dataclass
+from typing import List
+
+import numpy as np
 
 
-class ClearStrategy(Enum):
-    REBUILD = 0
-    DELETE = 1
+@dataclass
+class VectorData:
+    id: int
+    data: np.ndarray
 
 
 class VectorBase(ABC):
     """VectorBase: base vector store interface"""
 
     @abstractmethod
-    def add(self, key: str, data: "ndarray"):
+    def mul_add(self, datas: List[VectorData]):
         pass
 
     @abstractmethod
-    def search(self, data: "ndarray"):
+    def search(self, data: np.ndarray):
         pass
 
     @abstractmethod
-    def clear_strategy(self):
+    def rebuild(self, ids=None) -> bool:
         pass
 
-    def rebuild(self) -> bool:
-        raise NotImplementedError
-
+    @abstractmethod
     def delete(self, ids) -> bool:
-        raise NotImplementedError
+        pass
 
     @abstractmethod
-    def close(self):
+    def close(self) -> bool:
         pass

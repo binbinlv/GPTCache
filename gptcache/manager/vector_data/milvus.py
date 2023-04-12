@@ -1,8 +1,10 @@
+from typing import List
 from uuid import uuid4
 import numpy as np
 
 from gptcache.utils import import_pymilvus
-from gptcache.manager.vector_data.base import VectorBase, ClearStrategy
+from gptcache.manager.vector_data.base import VectorBase, VectorData
+
 
 import_pymilvus()
 
@@ -45,7 +47,36 @@ class Milvus(VectorBase):
         top_k: int = 1,
         index_params: dict = None,
         search_params: dict = None,
+        local_mode: bool = False,
+        local_data: str = "./milvus_data"
     ):
+        if dimension <= 0:
+            raise ValueError(
+                f"invalid `dim` param: {dimension} in the Milvus vector store."
+            )
+        self._local_mode = local_mode
+        self._local_data = local_data
+        self.dimension = dimension
+        self.top_k = top_k
+        self.index_params = index_params
+        if self._local_mode:
+            self._create_local(port, local_data)
+        self._connect(host, port, user, password, secure)
+        self._create_collection(collection_name)
+        self.search_params = (
+            search_params or self.SEARCH_PARAM[self.index_params["index_type"]]
+        )
+
+    def _create_local(self, port, local_data):
+        from gptcache.utils import import_milvus_lite  # pylint: disable=import-outside-toplevel
+        import_milvus_lite()
+        from milvus import MilvusServer  # pylint: disable=import-outside-toplevel
+        self._server = MilvusServer()
+        self._server.set_base_dir(local_data)
+        self._server.listen_port = int(port)
+        self._server.start()
+
+    def _connect(self, host, port, user, password, secure):
         try:
             i = [
                 connections.get_connection_addr(x[0])
@@ -62,18 +93,8 @@ class Milvus(VectorBase):
                 user=user,  # type: ignore
                 password=password,  # type: ignore
                 secure=secure,
+                timeout=10
             )
-        if dimension <= 0:
-            raise ValueError(
-                f"invalid `dim` param: {dimension} in the Milvus vector store."
-            )
-        self.dimension = dimension
-        self.top_k = top_k
-        self.index_params = index_params
-        self._create_collection(collection_name)
-        self.search_params = (
-            search_params or self.SEARCH_PARAM[self.index_params["index_type"]]
-        )
 
     def _create_collection(self, collection_name):
         if not utility.has_collection(collection_name, using=self.alias):
@@ -117,8 +138,10 @@ class Milvus(VectorBase):
 
         self.col.load()
 
-    def add(self, key: str, data: np.ndarray):
-        entities = [[key], data.reshape(1, self.dimension)]
+    def mul_add(self, datas: List[VectorData]):
+        data_array, id_array = map(list, zip(*((data.data, data.id) for data in datas)))
+        np_data = np.array(data_array).astype("float32")
+        entities = [id_array, np_data]
         self.col.insert(entities)
 
     def search(self, data: np.ndarray):
@@ -128,14 +151,16 @@ class Milvus(VectorBase):
             param=self.search_params,
             limit=self.top_k,
         )
-        return zip(search_result[0].distances, search_result[0].ids)
-
-    def clear_strategy(self):
-        return ClearStrategy.DELETE
+        return list(zip(search_result[0].distances, search_result[0].ids))
 
     def delete(self, ids):
         del_ids = ",".join([str(x) for x in ids])
         self.col.delete(f"id in [{del_ids}]")
 
+    def rebuild(self, ids=None):  # pylint: disable=unused-argument
+        self.col.compact()
+
     def close(self):
         self.col.flush(_async=True)
+        if self._local_mode:
+            self._server.stop()
